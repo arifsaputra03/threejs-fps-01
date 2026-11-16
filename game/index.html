@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EMBERLINE — Foundry Yard</title>
+<style>
+  /*
+   * EMBERLINE page styles. The page itself is almost empty: the WebGL canvas
+   * mounts into #game and hud.js builds the whole HUD (crosshair, top bar,
+   * kill feed, buy menu, overlays) as DOM inside a #hud root at runtime.
+   * This stylesheet therefore styles two things: the mount point, and the
+   * elements hud.js creates. Every id and class below is one hud.js or
+   * game.js writes or queries — rename nothing here without renaming it
+   * there too.
+   *
+   * Look plan: a warm dark foundry at dusk. The six palette entries from
+   * game/src/palette.js are the CSS custom properties below (canvas,
+   * surface, hairline, ink, muted, accent), plus the two team accents
+   * (aegis teal, ember orange). The scene and the page share the names so
+   * the two never drift apart.
+   */
+
+  /* ---- Design tokens: colours, radii, type. ---- */
+  :root {
+    --canvas: #241d17;   /* page ground, behind the canvas */
+    --surface: #2b2118;  /* panels, buy menu, overlay cards */
+    --hairline: #4a3a2c; /* borders, dividers */
+    --ink: #e9e6df;      /* primary text, crosshair, hitmarker */
+    --muted: #b8a894;    /* secondary text, labels */
+    --accent: #f0a830;   /* amber: money, plant bar, highlights */
+    --aegis: #4ec9b0;    /* player team (teal) */
+    --ember: #e4572e;    /* enemy team (ember orange) */
+    --radius-panel: 4px;
+    --radius-control: 8px;
+    --font-ui: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-readout: ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+
+  /* ---- Page base: a fixed, borderless full-screen shell. ---- */
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: var(--font-ui);
+  }
+
+  /* ---- Canvas mount and HUD shell. ----
+     #game holds the renderer's canvas; #hud is the root hud.js appends,
+     a click-through layer so the canvas keeps the mouse. */
+  #game, #game canvas {
+    position: fixed;
+    inset: 0;
+    display: block;
+  }
+  #hud {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  /* The one utility class: hides a HUD region or an overlay panel. */
+  .hidden { display: none !important; }
+
+  /* ---- Crosshair. ----
+     A centre dot with four arms; hud.js drives the arm gap through the
+     --gap property so the crosshair opens up with weapon spread. Hidden
+     unless the pointer is locked and the round is live. */
+  #crosshair {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    width: 0;
+    height: 0;
+    --gap: 7px;
+  }
+  #crosshair .dot {
+    position: absolute;
+    left: -1px;
+    top: -1px;
+    width: 2px;
+    height: 2px;
+    background: var(--ink);
+  }
+  #crosshair .line {
+    position: absolute;
+    background: var(--ink);
+    opacity: .9;
+  }
+  #crosshair .line.top {
+    left: -1px;
+    top: calc(-1 * var(--gap) - 8px);
+    width: 2px;
+    height: 8px;
+  }
+  #crosshair .line.bottom {
+    left: -1px;
+    top: var(--gap);
+    width: 2px;
+    height: 8px;
+  }
+  #crosshair .line.left {
+    top: -1px;
+    left: calc(-1 * var(--gap) - 8px);
+    width: 8px;
+    height: 2px;
+  }
+  #crosshair .line.right {
+    top: -1px;
+    left: var(--gap);
+    width: 8px;
+    height: 2px;
+  }
+
+  /* ---- Hitmarker. ----
+     A rotated cross that flashes on a hit; the .head variant turns ember
+     orange for a headshot. Shown for 120 ms by hud.js. */
+  #hitmarker {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    width: 26px;
+    height: 26px;
+    transform: translate(-50%, -50%) rotate(45deg);
+    opacity: 0;
+    transition: opacity 90ms linear;
+  }
+  #hitmarker.show { opacity: 1; }
+  #hitmarker::before, #hitmarker::after {
+    content: '';
+    position: absolute;
+    background: var(--ink);
+  }
+  #hitmarker::before {
+    left: 12px;
+    top: 0;
+    width: 2px;
+    height: 26px;
+  }
+  #hitmarker::after {
+    top: 12px;
+    left: 0;
+    height: 2px;
+    width: 26px;
+  }
+  #hitmarker.head::before, #hitmarker.head::after {
+    background: var(--ember);
+  }
+
+  /* ---- Damage vignette: an ember-red edge glow while hurt. ---- */
+  #damage-vignette {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 120ms linear;
+    background: radial-gradient(ellipse at center, transparent 55%, rgba(228, 87, 46, 0.45) 100%);
+  }
+  #damage-vignette.show { opacity: 1; }
+
+  /* ---- Top bar: team scores, alive pips, and the round clock. ---- */
+  #topbar {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-family: var(--font-readout);
+    font-size: 20px;
+  }
+  #topbar .team {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: color-mix(in srgb, var(--canvas) 70%, transparent);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-panel);
+  }
+  #topbar .team.aegis { border-bottom: 2px solid var(--aegis); }
+  #topbar .team.ember { border-bottom: 2px solid var(--ember); }
+  #topbar .alive {
+    font-size: 12px;
+    letter-spacing: 2px;
+    color: var(--muted);
+  }
+  #timer {
+    padding: 6px 14px;
+    background: color-mix(in srgb, var(--canvas) 70%, transparent);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-panel);
+  }
+
+  /* ---- Objective line, one row under the top bar. ---- */
+  #objective {
+    position: fixed;
+    top: 64px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 14px;
+    color: var(--muted);
+    letter-spacing: .04em;
+  }
+
+  /* ---- Kill feed, top right. Newest row first, five at most. ---- */
+  #killfeed {
+    position: fixed;
+    top: 16px;
+    right: 20px;
+    display: grid;
+    gap: 4px;
+    justify-items: end;
+    font-size: 13px;
+  }
+  .feed-row {
+    padding: 3px 8px;
+    background: color-mix(in srgb, var(--canvas) 70%, transparent);
+    border-radius: var(--radius-panel);
+  }
+  .feed-row .aegis {
+    color: var(--aegis);
+    font-weight: 600;
+  }
+  .feed-row .ember {
+    color: var(--ember);
+    font-weight: 600;
+  }
+  .feed-row .headshot {
+    color: var(--accent);
+    font-size: 11px;
+    letter-spacing: .08em;
+  }
+
+  /* ---- Centre announcements: ROUND WON, CHARGE PLANTED, GO, ... ---- */
+  #announce {
+    position: fixed;
+    top: 22%;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+    opacity: 0;
+    transition: opacity 200ms linear;
+  }
+  #announce.show { opacity: 1; }
+  .announce-title {
+    font-size: 42px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-shadow: 0 2px 12px rgba(0,0,0,.6);
+  }
+  .announce-sub {
+    margin-top: 6px;
+    font-size: 15px;
+    color: var(--muted);
+  }
+
+  /* ---- Bottom left: health and armour readouts. ---- */
+  #bottom-left {
+    position: fixed;
+    left: 32px;
+    bottom: 24px;
+    display: flex;
+    gap: 20px;
+    align-items: baseline;
+  }
+  #health, #armor {
+    font-family: var(--font-readout);
+  }
+  #health #hp, #armor #ap {
+    font-size: 44px;
+    line-height: 1;
+  }
+  #health .label, #armor .label {
+    font-size: 12px;
+    color: var(--muted);
+    margin-left: 6px;
+    letter-spacing: .1em;
+  }
+
+  /* ---- Bottom right: money, ammo, and the weapon name. ---- */
+  #bottom-right {
+    position: fixed;
+    right: 32px;
+    bottom: 24px;
+    text-align: right;
+  }
+  #money {
+    font-family: var(--font-readout);
+    font-size: 20px;
+    color: var(--accent);
+  }
+  #ammo {
+    font-family: var(--font-readout);
+    font-size: 44px;
+    line-height: 1.05;
+  }
+  #ammo .reserve {
+    font-size: 16px;
+    color: var(--muted);
+  }
+  #weapon-name {
+    font-size: 13px;
+    color: var(--muted);
+    letter-spacing: .04em;
+  }
+
+  /* ---- Plant / defuse progress bar, above the bottom centre. ---- */
+  #plant-bar {
+    position: fixed;
+    left: 50%;
+    bottom: 18%;
+    transform: translateX(-50%);
+    width: 260px;
+    height: 22px;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-panel);
+    background: color-mix(in srgb, var(--canvas) 70%, transparent);
+    display: none;
+  }
+  #plant-bar.show { display: block; }
+  #plant-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    border-radius: var(--radius-panel);
+  }
+  #plant-label {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-size: 12px;
+    letter-spacing: .08em;
+  }
+
+  /* ---- Buy menu: the one HUD panel that takes pointer input. ---- */
+  #buy-menu {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(480px, 92vw);
+    padding: 24px;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-panel);
+    pointer-events: auto;
+  }
+  #buy-menu h2 {
+    margin: 0 0 16px;
+    font-size: 20px;
+    letter-spacing: .08em;
+  }
+  .buy-grid {
+    display: grid;
+    gap: 8px;
+  }
+  .buy-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    font: inherit;
+    color: var(--ink);
+    background: var(--canvas);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-control);
+    cursor: pointer;
+    text-align: left;
+  }
+  .buy-item:hover { border-color: var(--accent); }
+  .buy-item.cant { opacity: .45; }
+  .buy-item.owned { border-color: var(--aegis); }
+  .buy-key {
+    font-family: var(--font-readout);
+    font-size: 12px;
+    color: var(--muted);
+    border: 1px solid var(--hairline);
+    border-radius: 4px;
+    padding: 2px 6px;
+  }
+  .buy-name { flex: 1; }
+  .buy-price {
+    font-family: var(--font-readout);
+    color: var(--accent);
+  }
+  .buy-hint {
+    margin: 14px 0 0;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  /* ---- Full-screen overlay panels: menu, pause, match end. ----
+     game.js writes the panel markup into #overlay; .panel is the card. */
+  #overlay {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: color-mix(in srgb, var(--canvas) 86%, transparent);
+    pointer-events: auto;
+  }
+  #overlay.hidden { display: none; }
+  .panel {
+    width: min(480px, 100%);
+    padding: 32px;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-panel);
+  }
+  .panel h1 {
+    margin: 0 0 4px;
+    font-size: 38px;
+    line-height: 1.1;
+    font-weight: 700;
+    letter-spacing: .06em;
+  }
+  .panel h2 {
+    margin: 0 0 8px;
+    font-size: 28px;
+    letter-spacing: .06em;
+  }
+  .panel .tagline {
+    color: var(--accent);
+    letter-spacing: .1em;
+    font-size: 13px;
+    text-transform: uppercase;
+  }
+  .panel p {
+    margin: 0 0 16px;
+    font-size: 15px;
+    line-height: 1.55;
+    color: var(--muted);
+  }
+  .panel .score {
+    font-family: var(--font-readout);
+    font-size: 44px;
+    color: var(--ink);
+  }
+  .panel button {
+    font: inherit;
+    font-weight: 600;
+    padding: 12px 18px;
+    margin-right: 8px;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-control);
+    background: var(--accent);
+    color: var(--canvas);
+    cursor: pointer;
+  }
+  .panel button:hover {
+    background: var(--ink);
+    border-color: var(--ink);
+  }
+  .controls {
+    margin: 0 0 24px;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--muted);
+  }
+  .controls b {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  /* ---- Reduced motion: snap the short fades instead of animating. ---- */
+  @media (prefers-reduced-motion: reduce) {
+    #hitmarker, #announce, #damage-vignette { transition-duration: 0.01ms; }
+  }
+</style>
+</head>
+<body>
+<!--
+  The canvas mount point. main.js appends the WebGL renderer's canvas here
+  and hud.js appends the #hud layer to the body; nothing else lives in the
+  markup — the HUD is built by JavaScript so the game owns its own DOM.
+-->
+<div id="game"></div>
+
+<!--
+  Import map: the bare specifier "three" resolves to the vendored build.
+  three.js 0.187.0 is committed under game/vendor/three/ on purpose — the
+  game loads with no network and no build step, which is what the offline
+  grader container needs. Do not point this at a CDN.
+-->
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.min.js"
+  }
+}
+</script>
+
+<!-- Entry point: game/src/main.js creates the game and the HUD. -->
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
